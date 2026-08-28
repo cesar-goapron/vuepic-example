@@ -325,6 +325,7 @@ defineExpose({
     :placeholder="computedPlaceholder"
     :auto-apply="autoApply"
     :config="config"
+    six-weeks="center"
   >
     <template #menu-header>
       <div class="ctk-menu-header">
