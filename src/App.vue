@@ -16,6 +16,11 @@ import PlaygroundCard from './components/PlaygroundCard.vue'
 const dateTimeValue = ref(null)
 const dateOnlyValue = ref(null)
 const timeOnlyValue = ref(null)
+const timeOnly12hValue = ref(null)
+const defaultTimePickerValue = ref(null)
+const toggleTimePickerValue = ref(null)
+const inlineToggleValue = ref(null)
+const maxRangeValue = ref(null)
 const rangePresetValue = ref(null)
 const inlineValue = ref(null)
 const editableValue = ref(null)
@@ -80,6 +85,30 @@ const onStartTimeConfirm = () => {
       </PlaygroundCard>
 
       <PlaygroundCard
+        title="Time Only Picker, 12-hour"
+        description="is24 set to false switches the scrollable time columns (and header) to a 12-hour clock with an am/pm column."
+        :value="timeOnly12hValue"
+      >
+        <DateTimePicker v-model="timeOnly12hValue" only-time :is24="false" />
+      </PlaygroundCard>
+
+      <PlaygroundCard
+        title="Default (vuepic) Time Picker"
+        description="timePickerStyle='default' opts out of the scrollable time columns and falls back to vuepic's own click-to-open time picker."
+        :value="defaultTimePickerValue"
+      >
+        <DateTimePicker v-model="defaultTimePickerValue" time-picker-style="default" />
+      </PlaygroundCard>
+
+      <PlaygroundCard
+        title="Toggle Time Picker"
+        description="timePickerStyle='toggle' keeps vuepic's own calendar/clock toggle button — click it to swap the calendar out for the scrollable time columns, rather than showing both at once like the first card above."
+        :value="toggleTimePickerValue"
+      >
+        <DateTimePicker v-model="toggleTimePickerValue" time-picker-style="toggle" />
+      </PlaygroundCard>
+
+      <PlaygroundCard
         title="Editable Date Range w/ Presets"
         description="date only range with presets. Enables Today | This Week | Next Week | This Month shortcuts. 
         Also editable — try pasting '08/01/2026 - 08/31/2026'."
@@ -89,11 +118,27 @@ const onStartTimeConfirm = () => {
       </PlaygroundCard>
 
       <PlaygroundCard
+        title="Max Range (7 days)"
+        description="maxRangeDays=7 clamps the range, ctk-style — click a start date, then click one far past a week out, and the end date snaps back to start + 6 days instead of using the clicked date."
+        :value="maxRangeValue"
+      >
+        <DateTimePicker v-model="maxRangeValue" range only-date :max-range-days="7" />
+      </PlaygroundCard>
+
+      <PlaygroundCard
         title="Standalone (Inline) Mode"
         description="inline renders the calendar always-open, no input — usable alongside any other mode."
         :value="inlineValue"
       >
         <DateTimePicker v-model="inlineValue" inline />
+      </PlaygroundCard>
+
+      <PlaygroundCard
+        title="Inline + Toggle Time Picker"
+        description="timePickerStyle is independent of inline — combine them to get an always-open calendar with vuepic's own toggle button instead of permanently-visible columns."
+        :value="inlineToggleValue"
+      >
+        <DateTimePicker v-model="inlineToggleValue" inline time-picker-style="toggle" />
       </PlaygroundCard>
 
       <PlaygroundCard

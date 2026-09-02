@@ -21,8 +21,8 @@ const formatValue = (value) => {
     <div class="card-body">
       <slot />
     </div>
-
-    <pre class="card-value">{{ formatValue(value) }}</pre>
+    
+    <pre class="card-value"><strong>model value:</strong> {{ formatValue(value) }}</pre>
   </section>
 </template>
 

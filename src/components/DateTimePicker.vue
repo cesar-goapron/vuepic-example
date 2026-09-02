@@ -18,11 +18,17 @@ import {
   pad2,
   parseTimeBound,
   toLocalDate,
+  startOfDay,
   normalizeIncomingValue,
   parseTypedValue,
   formatHeaderDate,
   formatHeaderTime,
 } from '../utils/dateHelpers'
+
+// ==========================================================================
+// Components
+// ==========================================================================
+import TimePicker from './TimePicker.vue'
 
 // ==========================================================================
 // Props / Model
@@ -52,6 +58,34 @@ const props = defineProps({
   maxTime: { type: [String, Object], default: null },
 
   minuteInterval: { type: [Number, String], default: 1 },
+
+  // Caps how many calendar days a range selection can span, ctk-style: if
+  // the second click would exceed the cap, the end date is clamped to
+  // (start + maxRangeDays - 1) rather than rejected — e.g. maxRangeDays=7,
+  // click the 1st then the 25th, and the range becomes the 1st-7th.
+  // vuepic's own `maxRange` config (not exposed here) validates instead of
+  // clamping — it just disables dates beyond the cap rather than snapping
+  // the end date to it, which isn't the ctk behavior being asked for.
+  maxRangeDays: { type: [Number, String], default: null },
+
+  // 24-hour vs 12-hour clock. Mirrors vuepic's own TimeConfig default (true).
+  is24: { type: Boolean, default: true },
+
+  // 'columns' renders always-visible scrollable hour/minute(/am-pm) columns
+  // via the `time-picker` slot, which fully replaces vuepic's own time UI —
+  // calendar and time show side by side (see the layout CSS below).
+  // 'toggle' instead renders those same columns via the narrower
+  // `time-picker-overlay` slot, which keeps vuepic's own calendar/clock
+  // toggle button and its click-to-open/closed gating — the calendar and
+  // columns are never shown together, only one at a time.
+  // 'default' opts out of our columns entirely and falls back to vuepic's
+  // own arrows-based time picker (also toggled, same as 'toggle').
+  timePickerStyle: {
+    type: String,
+    default: 'toggle',
+    validator: (value) => ['columns', 'toggle', 'default'].includes(value),
+  },
+
   disabled: { type: Boolean, default: false },
   placeholder: { type: String, default: null },
   clearable: { type: Boolean, default: true },
@@ -115,14 +149,73 @@ const presetDates = computed(() => {
 
 const timeConfig = computed(() => ({
   enableTimePicker: enableTimePicker.value,
+  // minutesIncrement steps vuepic's own arrow buttons; minutesGridIncrement
+  // separately steps the clickable overlay list you get from clicking the
+  // minute display — vuepic defaults THAT one to 5 regardless of
+  // minutesIncrement, which is why 'default' style showed 5-minute steps
+  // even though our own columns already respected minuteInterval.
   minutesIncrement: props.minuteInterval,
+  minutesGridIncrement: props.minuteInterval,
+  is24: props.is24,
 }))
+
+// 'columns' lands TimePicker as a sibling of the calendar (see the CSS
+// below, which puts them side by side). 'toggle' instead lands it inside
+// vuepic's own absolutely-positioned time overlay, which already covers
+// the calendar natively — no extra layout work needed there. Range mode
+// hands both slots arrays ([startHours, endHours]) instead of plain
+// numbers, which TimePicker doesn't handle, so range always falls back to
+// vuepic's own default time picker regardless of style.
+const useColumnTimePicker = computed(() => props.timePickerStyle === 'columns' && !props.range)
+const useToggleTimePicker = computed(() => props.timePickerStyle === 'toggle' && !props.range)
+
+// Adapts the time-picker-overlay slot's flat {hours, minutes, seconds,
+// setHours, setMinutes, setSeconds} shape into the {time, updateTime} shape
+// TimePicker already expects from the time-picker slot, so the component
+// itself doesn't need to know which slot placed it.
+const toOverlayUpdateTime = (setHours, setMinutes, setSeconds) => (next) => {
+  setHours(next.hours)
+  setMinutes(next.minutes)
+  setSeconds(next.seconds ?? 0)
+}
 
 const minTimeValue = computed(() => parseTimeBound(props.minTime))
 const maxTimeValue = computed(() => parseTimeBound(props.maxTime))
 
 const minDateValue = computed(() => toLocalDate(props.minDate))
 const maxDateValue = computed(() => toLocalDate(props.maxDate))
+
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  // Methods: Range clamping
+  //
+  // Applied wherever a range value can be written — the calendar-click path
+  // (@update:model-value below) and presets (selectPreset below) both go
+  // through this, so a preset like "This Month" gets clamped the same way
+  // a manual click-past-the-cap would.
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+const applyMaxRangeDays = (value) => {
+  if (!props.range || !props.maxRangeDays || !Array.isArray(value)) return value
+  const [start, end] = value
+  if (!start || !end) return value
+
+  const startDate = start instanceof Date ? start : toLocalDate(start)
+  const endDate = end instanceof Date ? end : toLocalDate(end)
+  const maxDays = Number(props.maxRangeDays)
+  const spanDays = Math.round((startOfDay(endDate) - startOfDay(startDate)) / 86400000) + 1
+  if (spanDays <= maxDays) return value
+
+  const clampedEndDate = new Date(startOfDay(startDate).getTime() + (maxDays - 1) * 86400000)
+  // Keep whatever time-of-day the clicked end date had (relevant for a
+  // date+time range) — only the date portion is being capped.
+  clampedEndDate.setHours(endDate.getHours(), endDate.getMinutes(), endDate.getSeconds(), endDate.getMilliseconds())
+
+  const isOnlyDateString = typeof end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(end)
+  const clampedEnd = isOnlyDateString
+    ? `${clampedEndDate.getFullYear()}-${pad2(clampedEndDate.getMonth() + 1)}-${pad2(clampedEndDate.getDate())}`
+    : clampedEndDate
+
+  return [start, clampedEnd]
+}
 
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   // Computed: Value normalization
@@ -174,6 +267,11 @@ const textInput = computed(() => {
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 const inputAttrs = computed(() => ({ clearable: props.clearable }))
 
+// Adds a class to vuepic's own ".dp--menu" so the range-only min-width fix
+// below (see the global styles) doesn't widen every mode's popup — only
+// range has header text long enough to need it.
+const uiConfig = computed(() => (props.range ? { menu: 'ctk-menu-range' } : undefined))
+
 // A plain JS Date always carries a time-of-day. For onlyDate/onlyTime modes
 // that's misleading (a "date only" pick shouldn't silently record the time
 // it happened to be clicked), so those modes emit a clean formatted string
@@ -223,12 +321,18 @@ const headerDates = computed(() => {
   return [toHeaderDate(raw)]
 })
 
-const headerYear = computed(() => (headerDates.value[0] ?? new Date()).getFullYear())
+// No year line in onlyTime mode — there's no date context to hang a year
+// off of, and showing today's year next to a bare time reads as a mistake
+// rather than useful information.
+const headerYear = computed(() => {
+  if (props.onlyTime) return null
+  return (headerDates.value[0] ?? new Date()).getFullYear()
+})
 
 const headerText = computed(() => {
   const [start, end] = headerDates.value
 
-  if (props.onlyTime) return start ? formatHeaderTime(start) : 'Select time'
+  if (props.onlyTime) return start ? formatHeaderTime(start, props.is24) : 'Select time'
 
   if (props.range) {
     if (!start && !end) return 'Select date range'
@@ -237,7 +341,7 @@ const headerText = computed(() => {
 
   if (!start) return 'Select date'
   const dateText = formatHeaderDate(start)
-  return enableTimePicker.value ? `${dateText}  ${formatHeaderTime(start)}` : dateText
+  return enableTimePicker.value ? `${dateText}  ${formatHeaderTime(start, props.is24)}` : dateText
 })
 
 // ==========================================================================
@@ -277,7 +381,8 @@ const selectNow = () => {
 // `selectNow` above already uses — which is why "Now" never auto-closes
 // either.
 const selectPreset = (preset) => {
-  modelValue.value = typeof preset.value === 'function' ? preset.value() : preset.value
+  const value = typeof preset.value === 'function' ? preset.value() : preset.value
+  modelValue.value = applyMaxRangeDays(value)
 }
 
 const handleSelectClick = (selectDate) => {
@@ -308,13 +413,14 @@ defineExpose({
   <VueDatePicker
     ref="datepickerRef"
     :model-value="normalizedModelValue"
-    @update:model-value="modelValue = $event"
+    @update:model-value="modelValue = applyMaxRangeDays($event)"
     :time-picker="onlyTime"
     :range="range"
     :inline="inline"
     :time-config="timeConfig"
     :formats="formats"
     :input-attrs="inputAttrs"
+    :ui="uiConfig"
     :text-input="textInput"
     :model-type="modelType"
     :min-date="minDateValue"
@@ -329,9 +435,25 @@ defineExpose({
   >
     <template #menu-header>
       <div class="ctk-menu-header">
-        <div class="ctk-menu-header-year">{{ headerYear }}</div>
+        <div v-if="headerYear !== null" class="ctk-menu-header-year">{{ headerYear }}</div>
         <div class="ctk-menu-header-value">{{ headerText }}</div>
       </div>
+    </template>
+
+    <template v-if="useColumnTimePicker" #time-picker="{ time, updateTime }">
+      <TimePicker :time="time" :update-time="updateTime" :is24="is24" :minutes-increment="minuteInterval" />
+    </template>
+
+    <template
+      v-if="useToggleTimePicker"
+      #time-picker-overlay="{ hours, minutes, seconds, setHours, setMinutes, setSeconds }"
+    >
+      <TimePicker
+        :time="{ hours, minutes, seconds }"
+        :update-time="toOverlayUpdateTime(setHours, setMinutes, setSeconds)"
+        :is24="is24"
+        :minutes-increment="minuteInterval"
+      />
     </template>
 
     <template v-if="presetDates.length" #left-sidebar>
@@ -381,6 +503,74 @@ defineExpose({
 </template>
 
 <style>
+/* vuepic's own ".dp--instance-calendar" wrapper (around the calendar +
+   whatever fills the time-picker area) has no layout of its own beyond
+   width:100% — its two children are plain blocks, so they stack vertically
+   by default instead of sitting side by side like ctk's. Forcing a flex
+   row here is what produces the calendar-left/time-right layout for
+   'columns'. align-items:stretch gives TimePicker's own wrapper div a
+   definite height matching the calendar's — TimePicker itself still uses
+   its own fixed 232px height rather than filling that (unlike 'toggle',
+   see below), so this doesn't perfectly match a taller six-weeks calendar,
+   but it keeps the wrapper from collapsing to TimePicker's own height in
+   a way that would misalign the divider below.
+
+   Scoped to exclude :has(.dp--overlay-container) as well as requiring
+   .time-picker, for two unrelated reasons:
+   - 'default' style never mounts TimePicker at all, so this simply
+     wouldn't match — but 'toggle' style DOES put a .time-picker somewhere
+     inside this wrapper (via the time-picker-overlay slot), while wanting
+     none of this: its columns render inside vuepic's own
+     ".dp--overlay-container", an absolutely-positioned layer (see below)
+     that already covers the calendar on its own, native terms — forcing
+     flex here would fight that rather than help it.
+   - Global (not scoped to this component) because the menu is teleported
+     to <body>, outside this component's own scoped styles entirely. */
+.dp--instance-calendar:has(.time-picker):not(:has(.dp--overlay-container)) {
+  display: flex;
+  align-items: stretch;
+}
+
+.dp--instance-calendar:has(.time-picker):not(:has(.dp--overlay-container))
+  > div:last-child:not(:only-child) {
+  border-inline-start: 1px solid var(--dp-border-color);
+}
+
+/* 'toggle' style only: TimePicker's own default height (232px, a fixed
+   fallback sized for 'columns' and standalone onlyTime, where there's no
+   reliable taller reference to match) doesn't apply inside vuepic's own
+   time overlay — .dp--overlay-container already has a correctly-sized,
+   definite height there (absolutely-positioned .dp--overlay stretches to
+   the still-visible calendar's own height — see the block comment above).
+   Fill it, minus vuepic's own close-time-picker button — that button is a
+   sibling of .dp--overlay-container within the same absolutely-positioned
+   box, so height:100% here would leave it no room and push it below the
+   box entirely, landing at a different position than the open-time-picker
+   button (which only has to share space with the calendar, not a second
+   button). Subtracting its height keeps both buttons at the same spot,
+   which is what actually makes toggling feel instant rather than like the
+   target moved. Three chained classes for specificity: this needs to beat
+   TimePicker's own scoped height:232px rule regardless of which <style>
+   tag Vite happens to inject first. */
+.dp--overlay-container.dp--time-picker-overlay-container .time-picker {
+  height: calc(100% - var(--dp-button-height));
+}
+
+.dp--instance-calendar.time-picker-narrow {
+  flex-direction: column;
+  /* align-items governs the CROSS axis, which flips from vertical to
+     horizontal once flex-direction is column — flex-start (fine for row
+     mode, top-aligning the two sides) would otherwise left-align the time
+     columns at their own narrow content width instead of stretching them
+     to match the calendar's full width. */
+  align-items: stretch;
+}
+
+.dp--instance-calendar.time-picker-narrow > div:last-child:not(:only-child) {
+  border-inline-start: none;
+  border-top: 1px solid var(--dp-border-color);
+}
+
 /* VueDatePicker's preset buttons render as bare <button class="dp--btn
    dp--preset-range">, and neither class resets native button chrome
    (appearance/background/border/cursor) — so the browser's default grey
@@ -391,6 +581,7 @@ defineExpose({
   flex-direction: column;
   gap: 4px;
   padding: 8px;
+  border-inline-end: none;
 }
 
 .dp--preset-range {
@@ -474,5 +665,25 @@ defineExpose({
   font-size: 1.2rem;
   font-weight: 600;
   margin-top: 2px;
+}
+
+/* .dp--menu is absolutely positioned (floating-ui) with no explicit width,
+   so it sizes via shrink-to-fit — which, unless something caps it, uses
+   the *unwrapped* single-line width of its widest content. A range's full
+   header text ("Sep 1, 2026 - Sep 7, 2026") is wider than the calendar's
+   own natural width, so once an end date is picked it becomes the thing
+   driving the popup's width, visibly growing it (and stretching the
+   calendar cells to match) partway through a selection.
+
+   Capping the header text to force it onto two lines (tried first) traded
+   that shift for a height shift instead, and reads worse. Giving the menu
+   a min-width sized for the full text up front — present from the very
+   first render, not reactive to what's currently selected — means there's
+   nothing to shift *into*: it's already as wide as it'll ever need to be.
+   ".ctk-menu-range" comes from this component's own `:ui="uiConfig"` prop
+   (only added when range is true) so non-range modes, whose header text is
+   always short, aren't widened for no reason. */
+.dp--menu.ctk-menu-range {
+  min-width: 320px;
 }
 </style>

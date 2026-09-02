@@ -229,7 +229,13 @@ const HEADER_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', '
 
 export const formatHeaderDate = (date) => `${HEADER_MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`
 
-export const formatHeaderTime = (date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+export const formatHeaderTime = (date, is24 = true) => {
+  if (is24) return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+  const hours24 = date.getHours()
+  const period = hours24 >= 12 ? 'pm' : 'am'
+  const hours12 = hours24 % 12 || 12
+  return `${hours12}:${pad2(date.getMinutes())} ${period}`
+}
 
 // Custom text-input parser (used for the `editable` prop) so typing OR
 // pasting a GoApron-format string works, falling back to whatever format
