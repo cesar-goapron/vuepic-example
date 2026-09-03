@@ -2,7 +2,7 @@
 // ==========================================================================
 // Frameworks
 // ==========================================================================
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 // ==========================================================================
 // Libraries
@@ -23,6 +23,9 @@ import {
   parseTypedValue,
   formatHeaderDate,
   formatHeaderTime,
+  translateMomentFormat,
+  resolveShortcutValue,
+  formatDateWithTokens,
 } from '../utils/dateHelpers'
 
 // ==========================================================================
@@ -47,7 +50,28 @@ const props = defineProps({
   // This Month), an array overrides them entirely, `false` disables presets.
   presets: { type: [Boolean, Array], default: false },
 
-  format: { type: [String, Function], default: null },
+  // ctk-shaped shortcuts — `{ key, label, value }` entries where `value` is
+  // a day-offset number, a function returning `[start, end]` Dates, or one
+  // of ctk's own DSL strings ('isoWeek'/'month'/'year'/etc., optionally
+  // prefixed '-'/'+' — see resolveShortcutValue in dateHelpers.js). Takes
+  // precedence over `presets` above when set, so GoApron's real shortcut
+  // config (query_filters/date_range_filter.rb's SHORTCUTS_DEFAULT) can be
+  // passed straight through unmodified.
+  customShortcuts: { type: Array, default: null },
+
+  // ctk-syntax (Moment tokens, e.g. 'YYYY-MM-DD') format for the *stored*
+  // v-model value — translated to date-fns tokens and fed to `modelType`.
+  // `outputFormat` below overrides this specifically for the value's
+  // format, mirroring ctk's own `formatOutput = outputFormat || format`.
+  format: { type: String, default: null },
+  outputFormat: { type: String, default: null },
+
+  // ctk-syntax (Moment tokens, e.g. 'dddd, MMMM Do YYYY', or a locale macro
+  // like 'll') format for how the value is *displayed* in the input —
+  // independent of `format`/`outputFormat` above, translated to date-fns
+  // tokens and fed to `formats.input`.
+  formatted: { type: String, default: null },
+
   minDate: { type: [Date, String], default: null },
   maxDate: { type: [Date, String], default: null },
 
@@ -89,6 +113,9 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   placeholder: { type: String, default: null },
   clearable: { type: Boolean, default: true },
+
+  // Forwarded onto the rendered <input> element's id attribute.
+  id: { type: String, default: null },
 
   // Commits the value as soon as a valid selection is clicked, without
   // requiring an explicit Select/checkmark click. On by default; set to
@@ -142,6 +169,7 @@ const config = { keepActionRow: true, closeOnAutoApply: false }
 const enableTimePicker = computed(() => !props.onlyDate && !props.onlyTime)
 
 const presetDates = computed(() => {
+  if (Array.isArray(props.customShortcuts)) return props.customShortcuts
   if (props.presets === true) return DEFAULT_PRESETS
   if (Array.isArray(props.presets)) return props.presets
   return []
@@ -237,12 +265,13 @@ const normalizedModelValue = computed(() => {
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   // Computed: Text input / editable
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// Only override the display format when the consumer asks for one, or when
-// typing is enabled — text-input parsing needs a concrete pattern to parse
-// against, so we can't leave it to VueDatePicker's internal auto-format
-// there the way we do for the read-only calendar-picking flow.
+// Only override the display format when the consumer asks for one (via
+// ctk's `formatted` — Moment syntax, translated below), or when typing is
+// enabled — text-input parsing needs a concrete pattern to parse against,
+// so we can't leave it to VueDatePicker's internal auto-format there the
+// way we do for the read-only calendar-picking flow.
 const effectiveFormat = computed(() => {
-  if (props.format) return props.format
+  if (props.formatted) return translateMomentFormat(props.formatted)
   if (!props.editable) return null
   if (props.onlyTime) return 'HH:mm'
   if (props.onlyDate) return 'MM/dd/yyyy'
@@ -265,7 +294,23 @@ const textInput = computed(() => {
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   // Computed: Display
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-const inputAttrs = computed(() => ({ clearable: props.clearable }))
+const inputAttrs = computed(() => {
+  // vuepic's `id` lives under InputAttributesConfig, not as a top-level
+  // prop on <VueDatePicker> — same nested-config pattern as clearable.
+  const attributes = { clearable: props.clearable }
+  if (props.id) attributes.id = props.id
+  return attributes
+})
+
+// ctk's own `formatOutput = outputFormat || format` fallback — the format
+// (Moment syntax) that governs the *stored* v-model value, translated to
+// date-fns tokens and fed to `modelType` below. `null` when the consumer
+// hasn't set either prop, so the onlyDate/onlyTime hardcoded defaults keep
+// applying unchanged.
+const valueFormat = computed(() => {
+  const momentValueFormat = props.outputFormat || props.format
+  return momentValueFormat ? translateMomentFormat(momentValueFormat) : null
+})
 
 // Adds a class to vuepic's own ".dp--menu" so the range-only min-width fix
 // below (see the global styles) doesn't widen every mode's popup — only
@@ -275,12 +320,31 @@ const uiConfig = computed(() => (props.range ? { menu: 'ctk-menu-range' } : unde
 // A plain JS Date always carries a time-of-day. For onlyDate/onlyTime modes
 // that's misleading (a "date only" pick shouldn't silently record the time
 // it happened to be clicked), so those modes emit a clean formatted string
-// instead of a Date object via modelType.
+// instead of a Date object via modelType. An explicit `format`/`outputFormat`
+// (ctk-syntax, see valueFormat above) takes precedence over those
+// hardcoded defaults — this is what lets full date+time mode also emit a
+// formatted string instead of a Date, matching ctk's own always-formatted
+// behavior, when the consumer opts in.
 const modelType = computed(() => {
+  if (valueFormat.value) return valueFormat.value
   if (props.onlyTime) return 'HH:mm'
   if (props.onlyDate) return 'yyyy-MM-dd'
   return undefined
 })
+
+// selectPreset/selectNow below write directly to modelValue.value rather
+// than going through VueDatePicker's own @update:model-value (which
+// applies modelType formatting internally before it ever reaches us) — so
+// a raw Date coming from either of those needs the same modelType-aware
+// string coercion applied by hand. Recurses over range arrays; passes
+// through anything that isn't a Date unchanged (already-formatted strings,
+// or a Date when modelType isn't set, i.e. plain date+time mode).
+const formatForModelType = (value) => {
+  if (!modelType.value) return value
+  if (Array.isArray(value)) return value.map(formatForModelType)
+  if (value instanceof Date) return formatDateWithTokens(value, modelType.value)
+  return value
+}
 
 const computedPlaceholder = computed(() => {
   if (props.placeholder) return props.placeholder
@@ -349,6 +413,14 @@ const headerText = computed(() => {
 // ==========================================================================
 const datepickerRef = ref(null)
 
+// VueDatePicker only re-renders the *closed* input's displayed text off its
+// own internal state changes (a new selection, opening/closing the menu) —
+// changing `formats.input` (driven by `effectiveFormat`, e.g. via the
+// `formatted` prop) while the menu is closed doesn't retrigger that
+// internal render, so the label blanks out until something else (like
+// focusing the input) forces it to recompute.
+watch(effectiveFormat, () => datepickerRef.value?.parseModel(), { flush: 'post' })
+
 // ==========================================================================
 // Methods
 //
@@ -362,14 +434,7 @@ const datepickerRef = ref(null)
 // which isn't reachable from this slot.
 // ==========================================================================
 const selectNow = () => {
-  const now = new Date()
-  if (props.onlyTime) {
-    modelValue.value = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`
-  } else if (props.onlyDate) {
-    modelValue.value = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
-  } else {
-    modelValue.value = now
-  }
+  modelValue.value = formatForModelType(new Date())
 }
 
 // vuepic's own `preset-dates` prop wires clicks to an internal handler that
@@ -380,9 +445,22 @@ const selectNow = () => {
 // and write straight to our v-model, the same direct-assignment approach
 // `selectNow` above already uses — which is why "Now" never auto-closes
 // either.
+const resolvePresetValue = (presetValue) => {
+  if (typeof presetValue === 'function') return presetValue()
+  // ctk's own shortcut DSL — a day-offset number or a unit string like
+  // 'isoWeek'/'-month' (see resolveShortcutValue in dateHelpers.js). Falls
+  // back to the raw value when it isn't recognized, preserving the
+  // existing plain-Date-pair-array preset shape some `presets` entries use
+  // directly.
+  if (typeof presetValue === 'number' || typeof presetValue === 'string') {
+    return resolveShortcutValue(presetValue) ?? presetValue
+  }
+  return presetValue
+}
+
 const selectPreset = (preset) => {
-  const value = typeof preset.value === 'function' ? preset.value() : preset.value
-  modelValue.value = applyMaxRangeDays(value)
+  const resolvedValue = resolvePresetValue(preset.value)
+  modelValue.value = formatForModelType(applyMaxRangeDays(resolvedValue))
 }
 
 const handleSelectClick = (selectDate) => {
@@ -434,9 +512,9 @@ defineExpose({
     six-weeks="center"
   >
     <template #menu-header>
-      <div class="ctk-menu-header">
-        <div v-if="headerYear !== null" class="ctk-menu-header-year">{{ headerYear }}</div>
-        <div class="ctk-menu-header-value">{{ headerText }}</div>
+      <div class="ga-dp-menu-header">
+        <div v-if="headerYear !== null" class="ga-dp-menu-header-year">{{ headerYear }}</div>
+        <div class="ga-dp-menu-header-value">{{ headerText }}</div>
       </div>
     </template>
 
@@ -503,29 +581,19 @@ defineExpose({
 </template>
 
 <style>
-/* vuepic's own ".dp--instance-calendar" wrapper (around the calendar +
-   whatever fills the time-picker area) has no layout of its own beyond
-   width:100% — its two children are plain blocks, so they stack vertically
-   by default instead of sitting side by side like ctk's. Forcing a flex
-   row here is what produces the calendar-left/time-right layout for
-   'columns'. align-items:stretch gives TimePicker's own wrapper div a
-   definite height matching the calendar's — TimePicker itself still uses
-   its own fixed 232px height rather than filling that (unlike 'toggle',
-   see below), so this doesn't perfectly match a taller six-weeks calendar,
-   but it keeps the wrapper from collapsing to TimePicker's own height in
-   a way that would misalign the divider below.
+.dp--theme-light,
+.dp--theme-dark {
+  /* --dp-primary-color: #192f4d; */
+  --dp-icon-color: #192f4d;
+  --dp-hover-icon-color: #397fdb;
+  --dp-range-between-dates-background-color: #b0ccf1;
+  --dp-range-between-border-color: transparent;
+}
 
-   Scoped to exclude :has(.dp--overlay-container) as well as requiring
-   .time-picker, for two unrelated reasons:
-   - 'default' style never mounts TimePicker at all, so this simply
-     wouldn't match — but 'toggle' style DOES put a .time-picker somewhere
-     inside this wrapper (via the time-picker-overlay slot), while wanting
-     none of this: its columns render inside vuepic's own
-     ".dp--overlay-container", an absolutely-positioned layer (see below)
-     that already covers the calendar on its own, native terms — forcing
-     flex here would fight that rather than help it.
-   - Global (not scoped to this component) because the menu is teleported
-     to <body>, outside this component's own scoped styles entirely. */
+.dp--today {
+  border-color: #397fdb;
+}
+
 .dp--instance-calendar:has(.time-picker):not(:has(.dp--overlay-container)) {
   display: flex;
   align-items: stretch;
@@ -536,33 +604,14 @@ defineExpose({
   border-inline-start: 1px solid var(--dp-border-color);
 }
 
-/* 'toggle' style only: TimePicker's own default height (232px, a fixed
-   fallback sized for 'columns' and standalone onlyTime, where there's no
-   reliable taller reference to match) doesn't apply inside vuepic's own
-   time overlay — .dp--overlay-container already has a correctly-sized,
-   definite height there (absolutely-positioned .dp--overlay stretches to
-   the still-visible calendar's own height — see the block comment above).
-   Fill it, minus vuepic's own close-time-picker button — that button is a
-   sibling of .dp--overlay-container within the same absolutely-positioned
-   box, so height:100% here would leave it no room and push it below the
-   box entirely, landing at a different position than the open-time-picker
-   button (which only has to share space with the calendar, not a second
-   button). Subtracting its height keeps both buttons at the same spot,
-   which is what actually makes toggling feel instant rather than like the
-   target moved. Three chained classes for specificity: this needs to beat
-   TimePicker's own scoped height:232px rule regardless of which <style>
-   tag Vite happens to inject first. */
+
 .dp--overlay-container.dp--time-picker-overlay-container .time-picker {
   height: calc(100% - var(--dp-button-height));
 }
 
 .dp--instance-calendar.time-picker-narrow {
   flex-direction: column;
-  /* align-items governs the CROSS axis, which flips from vertical to
-     horizontal once flex-direction is column — flex-start (fine for row
-     mode, top-aligning the two sides) would otherwise left-align the time
-     columns at their own narrow content width instead of stretching them
-     to match the calendar's full width. */
+
   align-items: stretch;
 }
 
@@ -571,11 +620,6 @@ defineExpose({
   border-top: 1px solid var(--dp-border-color);
 }
 
-/* VueDatePicker's preset buttons render as bare <button class="dp--btn
-   dp--preset-range">, and neither class resets native button chrome
-   (appearance/background/border/cursor) — so the browser's default grey
-   button face shows through. This is global (not scoped) because the
-   preset menu is teleported to <body>, outside this component's DOM. */
 .dp--preset-dates {
   display: flex;
   flex-direction: column;
@@ -599,8 +643,8 @@ defineExpose({
 }
 
 .dp--preset-range:hover {
-  background-color: var(--dp-hover-color);
-  color: var(--dp-hover-text-color);
+  background-color: var(--dp-primary-color);
+  color: #fff;
 }
 
 .dp--preset-range:focus-visible {
@@ -608,13 +652,6 @@ defineExpose({
   outline-offset: -2px;
 }
 
-/* Match ctk's confirm control: a plain green checkmark icon instead of a
-   filled "Select" text button. This is our own markup rendered through the
-   `action-buttons` slot (see the component template), reusing vuepic's own
-   ".dp--action-button"/".dp--action-select" classes so it still renders
-   inside the library's ".dp--action-buttons" container — keeping this
-   selector's specificity matched to vuepic's own rule it overrides
-   (`.dp--action-buttons .dp--action-select { background: var(--dp-primary-color) }`). */
 .dp--action-buttons .dp--action-select {
   display: inline-flex;
   align-items: center;
@@ -645,45 +682,33 @@ defineExpose({
   cursor: not-allowed;
 }
 
-/* ctk's blue "2018 / Sat 7 Apr / 17:20" banner, rendered through vuepic's
-   `menu-header` slot (see the component template) — global because, like
-   the preset buttons above, `.dp--menu-header` lives in the menu that's
-   teleported to <body>, outside this component's scoped DOM. */
 .dp--menu-header {
-  padding: 16px 20px;
-  background-color: var(--dp-primary-color);
+  padding: 10px 0px 10px 10px;
+  background-color: #192f4d;
 }
 
-.ctk-menu-header-year {
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 0.85rem;
-  font-weight: 500;
+.dp--arrow-top {
+  display: none;
+}
+.ga-dp-menu-header {
+  line-height: 1.2;
+}
+.ga-dp-menu-header-year,
+.ga-dp-menu-header-value {
+  color: rgba(255, 255, 255, 0.8);
+  font-family: 'museo-sans', Arial, sans-serif;
+  font-weight: 700;
 }
 
-.ctk-menu-header-value {
-  color: #fff;
-  font-size: 1.2rem;
-  font-weight: 600;
+.ga-dp-menu-header-year {
+  font-size: 14px;
+
+  opacity: 0.7;
+}
+
+.ga-dp-menu-header-value {
+  font-size: 18px;
   margin-top: 2px;
-}
-
-/* .dp--menu is absolutely positioned (floating-ui) with no explicit width,
-   so it sizes via shrink-to-fit — which, unless something caps it, uses
-   the *unwrapped* single-line width of its widest content. A range's full
-   header text ("Sep 1, 2026 - Sep 7, 2026") is wider than the calendar's
-   own natural width, so once an end date is picked it becomes the thing
-   driving the popup's width, visibly growing it (and stretching the
-   calendar cells to match) partway through a selection.
-
-   Capping the header text to force it onto two lines (tried first) traded
-   that shift for a height shift instead, and reads worse. Giving the menu
-   a min-width sized for the full text up front — present from the very
-   first render, not reactive to what's currently selected — means there's
-   nothing to shift *into*: it's already as wide as it'll ever need to be.
-   ".ctk-menu-range" comes from this component's own `:ui="uiConfig"` prop
-   (only added when range is true) so non-range modes, whose header text is
-   always short, aren't widened for no reason. */
-.dp--menu.ctk-menu-range {
-  min-width: 320px;
+  letter-spacing: normal;
 }
 </style>

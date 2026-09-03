@@ -103,13 +103,15 @@ const selectPeriod = (nextPeriod) => {
 // getBoundingClientRect rather than offsetTop: vuepic's menu wrapper is
 // position:absolute, so offsetTop would resolve against that ancestor
 // instead of the scroll container itself.
-const centerActive = (colEl) => {
+const centerActive = (colEl, { smooth = false } = {}) => {
   const active = colEl?.querySelector('.time-picker-cell.is-active')
   if (!active || !colEl) return
   const colRect = colEl.getBoundingClientRect()
   const activeRect = active.getBoundingClientRect()
   const offsetWithinCol = activeRect.top - colRect.top + colEl.scrollTop
-  colEl.scrollTop = offsetWithinCol - colEl.clientHeight / 2 + active.clientHeight / 2
+  const targetScrollTop = offsetWithinCol - colEl.clientHeight / 2 + active.clientHeight / 2
+  if (smooth) colEl.scrollTo({ top: targetScrollTop, behavior: 'smooth' })
+  else colEl.scrollTop = targetScrollTop
 }
 
 // So the first (00) and last (23/59) values can reach the same centered
@@ -152,11 +154,14 @@ onMounted(() => {
   columns.forEach((col) => resizeObserver.observe(col))
 })
 
-onBeforeUnmount(() => resizeObserver?.disconnect())
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  instanceCalendarEl?.classList.remove('time-picker-narrow')
+})
 
-watch(() => props.time.hours, () => centerActive(hoursColRef.value))
-watch(() => props.time.minutes, () => centerActive(minutesColRef.value))
-watch(period, () => centerActive(ampmColRef.value))
+watch(() => props.time.hours, () => centerActive(hoursColRef.value, { smooth: true }), { flush: 'post' })
+watch(() => props.time.minutes, () => centerActive(minutesColRef.value, { smooth: true }), { flush: 'post' })
+watch(period, () => centerActive(ampmColRef.value, { smooth: true }), { flush: 'post' })
 </script>
 
 <template>

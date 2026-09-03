@@ -35,6 +35,36 @@ const endTimePickerRef = ref(null)
 
 const gaValue = ref('2026-08-27 23:15:00 (EDT)')
 
+const goapronShortcutsValue = ref(null)
+
+// Transcribed verbatim from GoApron's own
+// app/models/query_filters/date_range_filter.rb SHORTCUTS_DEFAULT — proves
+// the ported shortcut DSL (resolveShortcutValue in dateHelpers.js) accepts
+// GoApron's real Ruby-driven config shape unmodified, not a synthetic one.
+const goapronShortcutsDefault = [
+  { key: 'today', label: 'Today', value: 0 },
+  { key: 'lastWeek', label: 'Last Week', value: '-isoWeek' },
+  { key: 'thisWeek', label: 'This Week', value: 'isoWeek' },
+  { key: 'nextWeek', label: 'Next Week', value: '+isoWeek' },
+  { key: 'lastMonth', label: 'Last Month', value: '-month' },
+  { key: 'thisMonth', label: 'This Month', value: 'month' },
+  { key: 'nextMonth', label: 'Next Month', value: '+month' },
+]
+
+// Common Moment-syntax *display* formats GoApron's own date fields use —
+// bound to the GoApron Shortcuts card's `formatted` prop below (display
+// only; the stored v-model value's own format is left at GoApron's real,
+// unvarying 'YYYY-MM-DD' — see the note on `formatted` below for why this
+// isn't wired to `output-format` instead).
+const goapronDisplayFormatOptions = [
+  { label: 'dddd, MMMM Do YYYY (DateTime.vue)', value: 'dddd, MMMM Do YYYY' },
+  { label: 'll (DateRangeFilter.vue macro)', value: 'll' },
+  { label: 'MMM D, YYYY', value: 'MMM D, YYYY' },
+  { label: 'MM/DD/YYYY', value: 'MM/DD/YYYY' },
+  { label: 'YYYY-MM-DD', value: 'YYYY-MM-DD' },
+]
+const goapronDisplayFormat = ref(goapronDisplayFormatOptions[0].value)
+
 // ==========================================================================
 // Methods
 // ==========================================================================
@@ -118,11 +148,34 @@ const onStartTimeConfirm = () => {
       </PlaygroundCard>
 
       <PlaygroundCard
+        title="Date Display Format"
+        description="The dropdown below live-switches `formatted` — ctk's Moment-syntax *display* format —
+        through the same common patterns GoApron's own fields use, independent of the stored
+        value (which stays GoApron's real 'YYYY-MM-DD', unaffected by this selector)."
+        :value="goapronShortcutsValue"
+      >
+        <select v-model="goapronDisplayFormat" class="display-format-select">
+          <option v-for="option in goapronDisplayFormatOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <DateTimePicker
+          v-model="goapronShortcutsValue"
+          range
+          only-date
+          id="goapron-shortcuts-picker"
+          :custom-shortcuts="goapronShortcutsDefault"
+          :formatted="goapronDisplayFormat"
+          output-format="YYYY-MM-DD"
+        />
+      </PlaygroundCard>
+
+      <PlaygroundCard
         title="Max Range (7 days)"
         description="maxRangeDays=7 clamps the range, ctk-style — click a start date, then click one far past a week out, and the end date snaps back to start + 6 days instead of using the clicked date."
         :value="maxRangeValue"
       >
-        <DateTimePicker v-model="maxRangeValue" range only-date :max-range-days="7" />
+        <DateTimePicker v-model="maxRangeValue" range only-date :max-range-days="7" editable/>
       </PlaygroundCard>
 
       <PlaygroundCard
@@ -260,5 +313,16 @@ const onStartTimeConfirm = () => {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.display-format-select {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid #d5d5d5;
+  border-radius: 6px;
+  background: #fff;
+  color: #222;
+  font-size: 0.85rem;
 }
 </style>
