@@ -35,6 +35,12 @@ const endTimePickerRef = ref(null)
 
 const gaValue = ref('2026-08-27 23:15:00 (EDT)')
 
+// Seeded (not null) so the clear ("x") button would normally show —
+// clearable=false should hide it. Also editable, to check the trickier
+// case: can the value still be wiped by selecting all the input text and
+// deleting it, bypassing the clear button entirely?
+const notClearableValue = ref('2026-09-03')
+
 const goapronShortcutsValue = ref(null)
 
 // Transcribed verbatim from GoApron's own
@@ -65,6 +71,18 @@ const goapronDisplayFormatOptions = [
 ]
 const goapronDisplayFormat = ref(goapronDisplayFormatOptions[0].value)
 
+// Transcribed verbatim from GoApron's real DateRangeFilter.vue template —
+// every prop/event name is copied as-is (not adapted) to prove this
+// wrapper is a drop-in replacement for that exact usage, not just for a
+// simplified stand-in of it.
+const dateRangeFilterValue = ref(null)
+const dateRangeFilterLastInputEvent = ref(null)
+const dateRangeFilterMinDate = ref(null)
+const dateRangeFilterMaxDate = ref(null)
+const dateRangeFilterMinuteInterval = ref(1)
+const dateRangeFilterOutputFormat = ref('YYYY-MM-DD')
+const dateRangeFilterScrollSelect = ref(false)
+
 // ==========================================================================
 // Methods
 // ==========================================================================
@@ -74,6 +92,16 @@ const onStartConfirm = () => {
 
 const onStartTimeConfirm = () => {
   endTimePickerRef.value?.openMenu()
+}
+
+// `focus`/`blur`/`change` are wired below purely to prove passing them
+// doesn't error or warn — they're no-ops here because they're no-ops in
+// DateRangeFilter.vue's real handlers too (confirmed by reading its
+// source: ctk itself never actually fires these three).
+const noopHandler = () => {}
+
+const onDateRangeFilterInput = (value) => {
+  dateRangeFilterLastInputEvent.value = value
 }
 </script>
 
@@ -171,6 +199,39 @@ const onStartTimeConfirm = () => {
       </PlaygroundCard>
 
       <PlaygroundCard
+        title="DateRangeFilter.vue Drop-In"
+        description="Every prop/event name below is copied verbatim from GoApron's real DateRangeFilter.vue
+        template, not adapted for this demo. `no-label` is flipped to false here (real usage sets true) only
+        so the label actually renders, proving that path works — everything else matches production as-is."
+        :value="{ model: dateRangeFilterValue, lastInputEvent: dateRangeFilterLastInputEvent }"
+      >
+        <DateTimePicker
+          v-model="dateRangeFilterValue"
+          :id="'date-range-filter-vue-component'"
+          :custom-shortcuts="goapronShortcutsDefault"
+          :format="'YYYY-MM-DD'"
+          :formatted="'ll'"
+          :inline="false"
+          :label="'Select Date Range'"
+          :no-label="false"
+          :min-date="dateRangeFilterMinDate"
+          :max-date="dateRangeFilterMaxDate"
+          :minute-interval="dateRangeFilterMinuteInterval"
+          :no-scroll-event="true"
+          :no-shortcuts="false"
+          :only-date="true"
+          :only-time="false"
+          :output-format="dateRangeFilterOutputFormat"
+          :range="true"
+          :scroll-select="dateRangeFilterScrollSelect"
+          @focus="noopHandler"
+          @blur="noopHandler"
+          @input="onDateRangeFilterInput"
+          @change="noopHandler"
+        />
+      </PlaygroundCard>
+
+      <PlaygroundCard
         title="Max Range (7 days)"
         description="maxRangeDays=7 clamps the range, ctk-style — click a start date, then click one far past a week out, and the end date snaps back to start + 6 days instead of using the clicked date."
         :value="maxRangeValue"
@@ -200,6 +261,14 @@ const onStartTimeConfirm = () => {
         :value="editableValue"
       >
         <DateTimePicker v-model="editableValue" editable />
+      </PlaygroundCard>
+      <PlaygroundCard
+        title="Not Clearable"
+        description="clearable=false hides the 'x' clear button. Also editable here — try selecting all the input
+        text and deleting it, to check that typing-to-empty doesn't wipe the value either."
+        :value="notClearableValue"
+      >
+        <DateTimePicker v-model="notClearableValue" only-date editable :clearable="false" />
       </PlaygroundCard>
       <PlaygroundCard
         title="Format Compatibility, Editable"

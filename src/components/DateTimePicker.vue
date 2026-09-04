@@ -50,6 +50,30 @@ const props = defineProps({
   // This Month), an array overrides them entirely, `false` disables presets.
   presets: { type: [Boolean, Array], default: false },
 
+  // ctk's field label, rendered above the input. Unlike ctk (which defaults
+  // `label` to 'Select date & time'), this defaults to `null` so existing
+  // consumers who never set it don't suddenly grow a label — the `noLabel`
+  // gate below still matches ctk's own default (false) once a label is set.
+  label: { type: String, default: null },
+  noLabel: { type: Boolean, default: false },
+
+  // Accepted for drop-in compatibility with real ctk usage, but inert:
+  // `noScrollEvent` has no effect in ctk itself either (confirmed by
+  // reading its source — it's not a declared prop there, just an inert
+  // attribute forwarded onto the native input). `scrollSelect` toggles
+  // whether scrolling a time column alone commits a value, vs. requiring a
+  // click — our own TimePicker.vue is already click-only regardless of
+  // this prop's value, which happens to match ctk's own common default
+  // usage (GoApron's real config passes `scrollSelect: false`).
+  noScrollEvent: { type: Boolean, default: true },
+  scrollSelect: { type: Boolean, default: true },
+
+  // Hides the presets/shortcuts sidebar outright, regardless of
+  // `customShortcuts`/`presets` below — matches ctk's own `noShortcuts`,
+  // which gates visibility independently of whether shortcuts are
+  // configured.
+  noShortcuts: { type: Boolean, default: false },
+
   // ctk-shaped shortcuts — `{ key, label, value }` entries where `value` is
   // a day-offset number, a function returning `[start, end]` Dates, or one
   // of ctk's own DSL strings ('isoWeek'/'month'/'year'/etc., optionally
@@ -112,6 +136,15 @@ const props = defineProps({
 
   disabled: { type: Boolean, default: false },
   placeholder: { type: String, default: null },
+
+  // `false` guarantees the value can't be cleared out, full stop — not
+  // just hiding vuepic's own "x" button. `inputAttrs.clearable` alone only
+  // covers that button; with `editable` also on, selecting the typed text
+  // and deleting it clears the value through a completely different path
+  // in vuepic (confirmed by reading its source: an emptied text input goes
+  // straight to its own internal clear call, bypassing our `textInput`
+  // parser entirely — there's nothing to intercept there). See the
+  // lastNonNullValue watch below for how the second path is covered.
   clearable: { type: Boolean, default: true },
 
   // Forwarded onto the rendered <input> element's id attribute.
@@ -139,7 +172,49 @@ const modelValue = defineModel({ default: null })
 // selection — unlike update:modelValue, which (with autoApply on) fires on
 // every intermediate click. Lets a consumer chain two pickers together, e.g.
 // focusing an "end date" picker as soon as "start date" is confirmed.
-const emit = defineEmits(['confirm'])
+//
+// `input` exists purely for drop-in compatibility with real ctk usage: in
+// Vue 2, `v-model` desugars to `:value` + `@input`, so ctk's own `input`
+// event IS the same event driving its v-model — code that separately
+// listens for `@input` (e.g. GoApron's DateRangeFilter.vue, which validates
+// on it) is relying on that, not on something ctk emits additionally. This
+// mirrors that by re-emitting under the `input` name whenever modelValue
+// changes (see the watch below), covering every path that writes to it
+// (calendar clicks, presets, Now, typed input) in one place rather than
+// duplicating an emit call at each site.
+// `focus`/`blur` are plain forwards of VueDatePicker's own native events
+// (it emits both for real, off the underlying input) — unlike ctk's
+// versions of these, which never actually fire (confirmed by reading its
+// source), so these give a real ctk-compatible focus/blur to whatever
+// already-written handler was waiting for one (e.g. DateTime.vue's
+// blurHandler, which also runs validation on blur).
+const emit = defineEmits(['confirm', 'input', 'focus', 'blur'])
+watch(modelValue, (value) => emit('input', value))
+
+// clearable=false must hold regardless of *how* a clear was attempted, but
+// vuepic's own "x" button (inputAttrs.clearable) only blocks one of the two
+// paths — an emptied editable text input clears the value through a
+// separate internal path that bypasses our own textInput parser (see the
+// comment on the `clearable` prop above), so there's no upstream hook to
+// prevent it at the source. Catching the resulting null here and reverting
+// is the only remaining way to make the guarantee actually hold. Tracks
+// the last real value rather than assuming "whatever it was before this
+// watch fired" so it still has something to revert to even if two clears
+// were attempted back to back.
+//
+// Seeded from modelValue.value directly, not `null` — a `watch` callback
+// only runs on a *change*, so a component that mounts with a value already
+// seeded (v-model starting non-null, e.g. an existing record being edited)
+// would otherwise never get captured here at all, since it never actually
+// "changes" to that value from this watch's point of view.
+let lastNonNullValue = modelValue.value
+watch(modelValue, (value) => {
+  if (value != null) {
+    lastNonNullValue = value
+  } else if (!props.clearable && lastNonNullValue != null) {
+    modelValue.value = lastNonNullValue
+  }
+})
 
 // ==========================================================================
 // Constants
@@ -169,6 +244,7 @@ const config = { keepActionRow: true, closeOnAutoApply: false }
 const enableTimePicker = computed(() => !props.onlyDate && !props.onlyTime)
 
 const presetDates = computed(() => {
+  if (props.noShortcuts) return []
   if (Array.isArray(props.customShortcuts)) return props.customShortcuts
   if (props.presets === true) return DEFAULT_PRESETS
   if (Array.isArray(props.presets)) return props.presets
@@ -488,97 +564,118 @@ defineExpose({
 </script>
 
 <template>
-  <VueDatePicker
-    ref="datepickerRef"
-    :model-value="normalizedModelValue"
-    @update:model-value="modelValue = applyMaxRangeDays($event)"
-    :time-picker="onlyTime"
-    :range="range"
-    :inline="inline"
-    :time-config="timeConfig"
-    :formats="formats"
-    :input-attrs="inputAttrs"
-    :ui="uiConfig"
-    :text-input="textInput"
-    :model-type="modelType"
-    :min-date="minDateValue"
-    :max-date="maxDateValue"
-    :min-time="minTimeValue"
-    :max-time="maxTimeValue"
-    :disabled="disabled"
-    :placeholder="computedPlaceholder"
-    :auto-apply="autoApply"
-    :config="config"
-    six-weeks="center"
-  >
-    <template #menu-header>
-      <div class="ga-dp-menu-header">
-        <div v-if="headerYear !== null" class="ga-dp-menu-header-year">{{ headerYear }}</div>
-        <div class="ga-dp-menu-header-value">{{ headerText }}</div>
-      </div>
-    </template>
-
-    <template v-if="useColumnTimePicker" #time-picker="{ time, updateTime }">
-      <TimePicker :time="time" :update-time="updateTime" :is24="is24" :minutes-increment="minuteInterval" />
-    </template>
-
-    <template
-      v-if="useToggleTimePicker"
-      #time-picker-overlay="{ hours, minutes, seconds, setHours, setMinutes, setSeconds }"
+  <div class="dtp-field">
+    <label v-if="label && !noLabel" :for="id" class="dtp-field-label">{{ label }}</label>
+    <VueDatePicker
+      ref="datepickerRef"
+      :model-value="normalizedModelValue"
+      @update:model-value="modelValue = applyMaxRangeDays($event)"
+      @focus="emit('focus', $event)"
+      @blur="emit('blur', $event)"
+      :time-picker="onlyTime"
+      :range="range"
+      :inline="inline"
+      :time-config="timeConfig"
+      :formats="formats"
+      :input-attrs="inputAttrs"
+      :ui="uiConfig"
+      :text-input="textInput"
+      :model-type="modelType"
+      :min-date="minDateValue"
+      :max-date="maxDateValue"
+      :min-time="minTimeValue"
+      :max-time="maxTimeValue"
+      :disabled="disabled"
+      :placeholder="computedPlaceholder"
+      :auto-apply="autoApply"
+      :config="config"
+      six-weeks="center"
     >
-      <TimePicker
-        :time="{ hours, minutes, seconds }"
-        :update-time="toOverlayUpdateTime(setHours, setMinutes, setSeconds)"
-        :is24="is24"
-        :minutes-increment="minuteInterval"
-      />
-    </template>
+      <template #menu-header>
+        <div class="ga-dp-menu-header">
+          <div v-if="headerYear !== null" class="ga-dp-menu-header-year">{{ headerYear }}</div>
+          <div class="ga-dp-menu-header-value">{{ headerText }}</div>
+        </div>
+      </template>
 
-    <template v-if="presetDates.length" #left-sidebar>
-      <div class="dp--preset-dates">
+      <template v-if="useColumnTimePicker" #time-picker="{ time, updateTime }">
+        <TimePicker :time="time" :update-time="updateTime" :is24="is24" :minutes-increment="minuteInterval" />
+      </template>
+
+      <template
+        v-if="useToggleTimePicker"
+        #time-picker-overlay="{ hours, minutes, seconds, setHours, setMinutes, setSeconds }"
+      >
+        <TimePicker
+          :time="{ hours, minutes, seconds }"
+          :update-time="toOverlayUpdateTime(setHours, setMinutes, setSeconds)"
+          :is24="is24"
+          :minutes-increment="minuteInterval"
+        />
+      </template>
+
+      <template v-if="presetDates.length" #left-sidebar>
+        <div class="dp--preset-dates">
+          <button
+            v-for="preset in presetDates"
+            :key="preset.label"
+            type="button"
+            class="dp--btn dp--preset-range"
+            @click="selectPreset(preset)"
+          >
+            {{ preset.label }}
+          </button>
+        </div>
+      </template>
+
+      <template #action-buttons="{ selectDate, selectionDisabled }">
         <button
-          v-for="preset in presetDates"
-          :key="preset.label"
+          v-if="!inline && !autoApply"
           type="button"
-          class="dp--btn dp--preset-range"
-          @click="selectPreset(preset)"
+          class="dp--action-button dp--action-cancel"
+          @click="datepickerRef?.closeMenu()"
         >
-          {{ preset.label }}
+          Cancel
         </button>
-      </div>
-    </template>
-
-    <template #action-buttons="{ selectDate, selectionDisabled }">
-      <button
-        v-if="!inline && !autoApply"
-        type="button"
-        class="dp--action-button dp--action-cancel"
-        @click="datepickerRef?.closeMenu()"
-      >
-        Cancel
-      </button>
-      <button
-        v-if="showNow && !range"
-        type="button"
-        class="dp--action-button dp--action-cancel"
-        @click="selectNow"
-      >
-        Now
-      </button>
-      <button
-        type="button"
-        class="dp--action-button dp--action-select"
-        aria-label="Select"
-        :disabled="selectionDisabled"
-        @click="handleSelectClick(selectDate)"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2e9e4f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="4 12 9 18 20 6" />
-        </svg>
-      </button>
-    </template>
-  </VueDatePicker>
+        <button
+          v-if="showNow && !range"
+          type="button"
+          class="dp--action-button dp--action-cancel"
+          @click="selectNow"
+        >
+          Now
+        </button>
+        <button
+          type="button"
+          class="dp--action-button dp--action-select"
+          aria-label="Select"
+          :disabled="selectionDisabled"
+          @click="handleSelectClick(selectDate)"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2e9e4f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 12 9 18 20 6" />
+          </svg>
+        </button>
+      </template>
+    </VueDatePicker>
+  </div>
 </template>
+
+<style scoped>
+/* Unlike the styles below (which target vuepic's teleported-to-<body> menu
+   and so must be global), this wrapper div and its label render in this
+   component's own normal DOM position — scoped styling works fine here. */
+.dtp-field-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  /* Falls back rather than relying solely on --dp-text-color: that variable
+     is set on vuepic's own ".dp--main" wrapper, a sibling of this label
+     rather than an ancestor of it, so it isn't in scope here. */
+  color: var(--dp-text-color, #333);
+}
+</style>
 
 <style>
 .dp--theme-light,
