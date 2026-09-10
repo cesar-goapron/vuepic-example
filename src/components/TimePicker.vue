@@ -255,7 +255,7 @@ watch(period, () => centerActive(ampmColRef.value, { smooth: true }), { flush: '
         class="time-picker-cell"
         :class="{ 'is-active': item.value === time.hours }"
         @click="selectHour(item.value)"
-      >{{ item.text }}</button>
+      ><span class="time-picker-cell-text">{{ item.text }}</span></button>
     </div>
     <div ref="minutesColRef" class="time-picker-col">
       <button
@@ -265,7 +265,7 @@ watch(period, () => centerActive(ampmColRef.value, { smooth: true }), { flush: '
         class="time-picker-cell"
         :class="{ 'is-active': item.value === time.minutes }"
         @click="selectMinute(item.value)"
-      >{{ item.text }}</button>
+      ><span class="time-picker-cell-text">{{ item.text }}</span></button>
     </div>
     <div v-if="!is24" ref="ampmColRef" class="time-picker-col time-picker-col-ampm">
       <button
@@ -275,7 +275,7 @@ watch(period, () => centerActive(ampmColRef.value, { smooth: true }), { flush: '
         class="time-picker-cell"
         :class="{ 'is-active': p === period }"
         @click="selectPeriod(p)"
-      >{{ p.toLowerCase() }}</button>
+      ><span class="time-picker-cell-text">{{ p.toLowerCase() }}</span></button>
     </div>
   </div>
 </template>
@@ -350,20 +350,49 @@ watch(period, () => centerActive(ampmColRef.value, { smooth: true }), { flush: '
   cursor: pointer;
   font-family: var(--dp-font-family);
   font-size: 0.9rem;
-  color: var(--dp-text-color);
   text-align: center;
   text-transform: lowercase;
   scroll-snap-align: center;
+  position: relative;
 }
 
-.time-picker-cell:hover:not(.is-active) {
-  background-color: var(--dp-hover-color);
+/* The animated highlight itself — scales in from nothing on hover/active
+   instead of an instant background-color swap. Sized to 70% width like
+   ctk's own '.time-picker-column-item-effect', not the full cell, so it
+   reads as a pill rather than a full-width block. */
+.time-picker-cell::before {
+  content: '';
+  position: absolute;
+  inset: 3px 15%;
+  border-radius: var(--dp-border-radius);
+  background-color: var(--dp-primary-color);
+  opacity: 0;
+  transform: scale(0);
+  transition: transform 0.45s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.45s cubic-bezier(0.23, 1, 0.32, 1);
+  pointer-events: none;
+}
+
+.time-picker-cell:hover:not(.is-active)::before {
+  transform: scale(1);
+  opacity: 0.6;
+}
+
+.time-picker-cell.is-active::before {
+  transform: scale(1);
+  opacity: 1;
+}
+.time-picker-cell-text {
+  position: relative;
+  color: var(--dp-text-color);
+  transition: color 0.45s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.time-picker-cell:hover .time-picker-cell-text,
+.time-picker-cell.is-active .time-picker-cell-text {
+  color: #fff;
 }
 
 .time-picker-cell.is-active {
-  background-color: var(--dp-primary-color);
-  color: #fff;
   font-weight: 600;
-  border-radius: var(--dp-border-radius);
 }
 </style>
