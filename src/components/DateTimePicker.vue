@@ -107,6 +107,12 @@ const props = defineProps({
 
   minuteInterval: { type: [Number, String], default: 1 },
 
+  // Only meaningful with the scrollable columns (timePickerStyle 'columns'
+  // or 'toggle') — see TimePicker.vue's own selectOnScroll prop. On by
+  // default; set to `false` to make scrolling purely for browsing, leaving
+  // click as the only way to select a value.
+  selectOnScroll: { type: Boolean, default: true },
+
   // Caps how many calendar days a range selection can span, ctk-style: if
   // the second click would exceed the cap, the end date is clamped to
   // (start + maxRangeDays - 1) rather than rejected — e.g. maxRangeDays=7,
@@ -599,7 +605,13 @@ defineExpose({
       </template>
 
       <template v-if="useColumnTimePicker" #time-picker="{ time, updateTime }">
-        <TimePicker :time="time" :update-time="updateTime" :is24="is24" :minutes-increment="minuteInterval" />
+        <TimePicker
+          :time="time"
+          :update-time="updateTime"
+          :is24="is24"
+          :minutes-increment="minuteInterval"
+          :select-on-scroll="selectOnScroll"
+        />
       </template>
 
       <template
@@ -611,6 +623,7 @@ defineExpose({
           :update-time="toOverlayUpdateTime(setHours, setMinutes, setSeconds)"
           :is24="is24"
           :minutes-increment="minuteInterval"
+          :select-on-scroll="selectOnScroll"
         />
       </template>
 

@@ -17,6 +17,7 @@ const dateTimeValue = ref(null)
 const dateOnlyValue = ref(null)
 const timeOnlyValue = ref(null)
 const timeOnly12hValue = ref(null)
+const noScrollSelectValue = ref(null)
 const defaultTimePickerValue = ref(null)
 const toggleTimePickerValue = ref(null)
 const inlineToggleValue = ref(null)
@@ -148,6 +149,14 @@ const onDateRangeFilterInput = (value) => {
         :value="timeOnly12hValue"
       >
         <DateTimePicker v-model="timeOnly12hValue" only-time :is24="false" />
+      </PlaygroundCard>
+
+      <PlaygroundCard
+        title="Scroll-to-Select Disabled"
+        description="select-on-scroll=false makes scrolling purely for browsing — only clicking a cell commits a value."
+        :value="noScrollSelectValue"
+      >
+        <DateTimePicker v-model="noScrollSelectValue" only-time :select-on-scroll="false" />
       </PlaygroundCard>
 
       <PlaygroundCard

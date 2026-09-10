@@ -16,6 +16,11 @@ import { pad2 } from '../utils/dateHelpers'
 // (see the ".dp--instance-calendar" ResizeObserver below) — stack instead.
 const NARROW_BREAKPOINT = 480
 
+// A free scroll commits whichever cell ends up centered only after this
+// many ms of no further scroll movement — ctk's own wheel picker waits for
+// the scroll to actually stop rather than acting on every scroll frame.
+const SCROLL_SETTLE_DELAY = 200
+
 // ==========================================================================
 // Props
 //
@@ -30,6 +35,12 @@ const props = defineProps({
   updateTime: { type: Function, required: true },
   is24: { type: Boolean, default: true },
   minutesIncrement: { type: [Number, String], default: 1 },
+
+  // Commits whichever cell ends up centered after a free scroll settles
+  // (see SCROLL_SETTLE_DELAY/selectCenteredValue below), ctk-style. On by
+  // default; set to `false` to make scrolling purely for browsing, leaving
+  // click as the only way to select a value.
+  selectOnScroll: { type: Boolean, default: true },
 })
 
 // ==========================================================================
@@ -127,8 +138,52 @@ const applyEdgeSpacers = (colEl) => {
   colEl.style.paddingBottom = `${spacer}px`
 }
 
+// Finds whichever cell in colEl sits nearest the column's vertical center —
+// the same "centered" position centerActive() scrolls the active cell to —
+// and reports its value via onSelect, ctk-style, if it differs from
+// currentValue. offsetTop is relative to colEl itself (its nearest
+// positioned ancestor, since .time-picker-col is position:relative), so it
+// already accounts for applyEdgeSpacers()'s padding without extra math.
+const selectCenteredValue = (colEl, values, currentValue, onSelect) => {
+  if (!colEl) return
+  const targetY = colEl.scrollTop + colEl.clientHeight / 2
+  let closestValue = null
+  let closestDistance = Infinity
+  colEl.querySelectorAll('.time-picker-cell').forEach((cell, index) => {
+    const cellCenter = cell.offsetTop + cell.offsetHeight / 2
+    const distance = Math.abs(cellCenter - targetY)
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closestValue = values[index]
+    }
+  })
+  if (closestValue !== null && closestValue !== currentValue) onSelect(closestValue)
+}
+
+// Debounces selectCenteredValue behind SCROLL_SETTLE_DELAY so it commits
+// once scrolling actually stops instead of mid-scroll. getValues/getCurrent
+// are thunks (rather than plain values) since hourItems/minuteItems/period
+// are computed and can change between when the listener is bound and when
+// it eventually fires (e.g. is24 toggling mid-scroll). Checking
+// props.selectOnScroll here, rather than skipping the listener entirely
+// when it's off, keeps the prop reactive without needing to re-bind on
+// change.
+const onColumnScrollSettle = (colEl, getValues, getCurrent, onSelect) => {
+  let timer = null
+  const handler = () => {
+    clearTimeout(timer)
+    if (!props.selectOnScroll) return
+    timer = setTimeout(() => selectCenteredValue(colEl, getValues(), getCurrent(), onSelect), SCROLL_SETTLE_DELAY)
+  }
+  handler.cancel = () => clearTimeout(timer)
+  return handler
+}
+
 let resizeObserver = null
 let instanceCalendarEl = null
+let hoursScrollHandler = null
+let minutesScrollHandler = null
+let periodScrollHandler = null
 
 // One observer, two jobs: resizing vuepic's own ".dp--instance-calendar"
 // (the calendar+time wrapper — reached via closest() since vuepic renders
@@ -152,11 +207,36 @@ onMounted(() => {
 
   if (instanceCalendarEl) resizeObserver.observe(instanceCalendarEl)
   columns.forEach((col) => resizeObserver.observe(col))
+
+  hoursScrollHandler = onColumnScrollSettle(
+    hoursColRef.value,
+    () => hourItems.value.map((item) => item.value),
+    () => props.time.hours,
+    selectHour,
+  )
+  minutesScrollHandler = onColumnScrollSettle(
+    minutesColRef.value,
+    () => minuteItems.value.map((item) => item.value),
+    () => props.time.minutes,
+    selectMinute,
+  )
+  periodScrollHandler = onColumnScrollSettle(ampmColRef.value, () => ['AM', 'PM'], () => period.value, selectPeriod)
+
+  hoursColRef.value?.addEventListener('scroll', hoursScrollHandler, { passive: true })
+  minutesColRef.value?.addEventListener('scroll', minutesScrollHandler, { passive: true })
+  ampmColRef.value?.addEventListener('scroll', periodScrollHandler, { passive: true })
 })
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   instanceCalendarEl?.classList.remove('time-picker-narrow')
+
+  hoursScrollHandler?.cancel()
+  minutesScrollHandler?.cancel()
+  periodScrollHandler?.cancel()
+  hoursColRef.value?.removeEventListener('scroll', hoursScrollHandler)
+  minutesColRef.value?.removeEventListener('scroll', minutesScrollHandler)
+  ampmColRef.value?.removeEventListener('scroll', periodScrollHandler)
 })
 
 watch(() => props.time.hours, () => centerActive(hoursColRef.value, { smooth: true }), { flush: 'post' })
