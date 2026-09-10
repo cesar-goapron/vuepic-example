@@ -166,6 +166,7 @@ watch(period, () => centerActive(ampmColRef.value, { smooth: true }), { flush: '
 
 <template>
   <div ref="rootRef" class="time-picker">
+    <div class="time-borders"></div>
     <div ref="hoursColRef" class="time-picker-col">
       <button
         v-for="item in hourItems"
@@ -203,6 +204,7 @@ watch(period, () => centerActive(ampmColRef.value, { smooth: true }), { flush: '
 .time-picker {
   display: flex;
   height: 232px;
+  position: relative;
 }
 
 .time-picker-col {
@@ -215,6 +217,25 @@ watch(period, () => centerActive(ampmColRef.value, { smooth: true }), { flush: '
      already-stretched height instead of growing it, which would otherwise
      re-trigger the observer with an ever-larger size on every callback. */
   box-sizing: border-box;
+  /* Lets a free scroll (wheel/trackpad/touch) come to rest centered on a
+     cell, ctk-wheel-style, instead of wherever momentum happened to stop —
+     complements centerActive()'s JS scroll, which handles centering on
+     click/value-change rather than on user-driven scrolling. */
+  scroll-snap-type: y mandatory;
+}
+
+.time-borders {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  margin: auto;
+  height: 34px;
+  border-color: var(--dp-border-color-hover);
+  border-style: solid;
+  border-width: 1px 0 1px;
+  width: 100%;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .time-picker-col + .time-picker-col {
@@ -252,6 +273,7 @@ watch(period, () => centerActive(ampmColRef.value, { smooth: true }), { flush: '
   color: var(--dp-text-color);
   text-align: center;
   text-transform: lowercase;
+  scroll-snap-align: center;
 }
 
 .time-picker-cell:hover:not(.is-active) {

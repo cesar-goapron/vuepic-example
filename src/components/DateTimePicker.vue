@@ -702,8 +702,15 @@ defineExpose({
 }
 
 
-.dp--overlay-container.dp--time-picker-overlay-container .time-picker {
+/* vuepic only renders its calendar<->time toggle button (as .time-picker's
+   next sibling, inside this container) when a calendar exists to toggle to;
+   in onlyTime mode there's no such button, so don't reserve space for it. */
+.dp--overlay-container.dp--time-picker-overlay-container .time-picker:has(+ button) {
   height: calc(100% - var(--dp-button-height));
+}
+
+.dp--overlay-container.dp--time-picker-overlay-container .time-picker:not(:has(+ button)) {
+  height: 100%;
 }
 
 .dp--instance-calendar.time-picker-narrow {
